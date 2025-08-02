@@ -1,153 +1,135 @@
-terraform {
-  required_providers {
-    checkpoint = {
-      source = "CheckPointSW/checkpoint"
-      version = "1.3.0"
-    }
+# Configure the AzureRM provider
+# This block specifies that Terraform will use the Azure Resource Manager (AzureRM) provider.
+# The 'features {}' block is often included to enable certain provider features,
+# though it's not strictly necessary for basic operations.
+provider "azurerm" {
+  features {}
+}
+
+# Define a Resource Group
+# A Resource Group is a logical container for Azure resources.
+# All resources in this example will be deployed into this Resource Group.
+resource "azurerm_resource_group" "rg" {
+  name     = "my-terraform-rg" # Name of the Resource Group
+  location = "East US"         # Azure region where the Resource Group will be created
+}
+
+# Define a Virtual Network (VNet)
+# A VNet is the fundamental building block for your private network in Azure.
+# It allows many types of Azure resources to securely communicate with each other,
+# the internet, and on-premises networks.
+resource "azurerm_virtual_network" "vnet" {
+  name                = "my-terraform-vnet"
+  address_space       = ["10.0.0.0/16"] # The address space for the VNet
+  location            = azurerm_resource_group.rg.location # Inherit location from the Resource Group
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+# Define a Subnet
+# Subnets enable you to segment the virtual network into one or more sub-networks
+# and allocate a portion of the VNet's address space to each subnet.
+resource "azurerm_subnet" "subnet" {
+  name                 = "my-terraform-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"] # The address prefix for the subnet
+}
+
+# Define a Network Security Group (NSG)
+# An NSG contains security rules that allow or deny inbound network traffic
+# to, or outbound network traffic from, several types of Azure resources.
+resource "azurerm_network_security_group" "nsg" {
+  name                = "my-terraform-nsg"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  # Security rule to allow SSH (port 22) from any source
+  security_rule {
+    name                       = "SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22" # SSH port
+    source_address_prefix      = "*"  # Allow from any IP address
+    destination_address_prefix = "*"
   }
 }
 
-# Configuration of Terraform with Azure environment variables
-provider "azurerm" {
-  features { }
-  client_id = var.azure-client-id
-  client_secret = var.azure-client-secret
-  subscription_id = var.azure-subscription
-  tenant_id = var.azure-tenant
+# Define a Public IP address
+# A Public IP address allows internet-facing communication to Azure resources.
+resource "azurerm_public_ip" "public_ip" {
+  name                = "my-terraform-publicip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static" # Static IP ensures the IP address doesn't change
 }
 
-# Create vmss resource group
-resource "azurerm_resource_group" "rg-ckpmgmt" {
-  name = "rg-${var.vmss-name}"
-  location = var.location
+# Define a Network Interface (NIC)
+# A NIC enables an Azure Virtual Machine to communicate with the internet,
+# Azure, and on-premises resources.
+resource "azurerm_network_interface" "nic" {
+  name                = "my-terraform-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.public_ip.id # Associate Public IP
+  }
 }
 
-# Deploy the vmss template w/ remote-access
-resource "azurerm_resource_group_template_deployment" "template-deployment-vmss" {
-  name                = "${var.vmss-name}-deploy"
-  resource_group_name = "rg-${var.vmss-name}"
-  deployment_mode     = "Complete"
-  depends_on = [azurerm_resource_group.rg-ckpmgmt]
-
-  template_content    = file("${path.module}/template.json")
-  parameters_content  = <<PARAMETERS
-  {
-        "location": { 
-            "value": "${var.location}" 
-        },
-        "authenticationType": { 
-            "value": "password" 
-        },
-        "adminPassword": { 
-            "value": "${var.vmss-password}"
-        },
-        "upgrading": { 
-            "value": "no" 
-        },
-        "vmName": { 
-            "value": "${var.vmss-name}" 
-        },
-        "instanceCount": { 
-            "value": "${var.vmss-min-members}" 
-        },
-        "maxInstanceCount": { 
-            "value": "${var.vmss-max-members}" 
-        },
-        "managementServer": { 
-            "value": "${var.mgmt-name}" 
-        },
-        "configurationTemplate": { 
-            "value": "${var.vmss-template}"
-        },
-        "adminEmail": {
-            "value": "${var.vmss-admin-alert}"
-        },
-        "deploymentMode": { 
-            "value": "Standard"
-        },
-        "instanceLevelPublicIP": { 
-            "value": "yes" 
-        },
-        "mgmtInterfaceOpt1": { 
-            "value": "eth1-private" 
-        },
-        "appLoadDistribution": { 
-            "value": "Default" 
-        },
-        "ilbLoadDistribution": { 
-            "value": "Default" 
-        },
-        "availabilityZonesNum": { 
-            "value": ${var.vmss-zones-number}
-        },
-        "customMetrics": {
-            "value": "yes"
-        },
-        "cloudGuardVersion": { 
-            "value": "R80.40 - Bring Your Own License" 
-        },
-        "vmSize": { 
-            "value": "${var.vmss-vmsize}"
-        },
-        "sicKey": { 
-            "value": "${var.vmss-sic}"
-        },
-        "bootstrapScript": { 
-            "value": "" 
-        },
-        "allowDownloadFromUploadToCheckPoint": { 
-            "value": "true" 
-        },
-        "diskType": { 
-            "value": "Standard_LRS"
-        },
-        "sourceImageVhdUri": { 
-            "value": "noCustomUri"
-        },
-        "virtualNetworkName": { 
-            "value": "v${var.vmss-vnet}"
-        },
-        "virtualNetworkAddressPrefixes": { 
-            "value": ["172.16.0.0/22"] 
-        },
-        "vnetNewOrExisting" : { 
-            "value": "existing" 
-        },
-        "virtualNetworkExistingRGName": { 
-            "value": "rg-v${var.vmss-vnet}"
-        },
-        "subnet1Name": { 
-            "value": "${var.vmss-vnet}-frontend"
-        },
-        "subnet1Prefix": { 
-            "value": "172.16.0.0/24"
-        },
-        "subnet2Name": { 
-            "value": "${var.vmss-vnet}-backend" 
-        },
-        "subnet2Prefix": { 
-            "value": "172.16.1.0/24" 
-        },
-        "subnet2StartAddress": { 
-            "value": "172.16.1.4" 
-        }
-  }  
-  PARAMETERS
+# Associate the NSG with the Subnet
+# It's generally recommended to associate NSGs at the subnet level for broader control.
+resource "azurerm_subnet_network_security_group_association" "nsg_association" {
+  subnet_id                 = azurerm_subnet.subnet.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
 }
 
-# Connecting to ckpmgmt
-provider "checkpoint" {
-    server = var.mgmt-ip
-    username = var.api-username
-    password = var.api-password
-    context = var.provider-context
-    timeout = "180"
+# Define a Virtual Machine
+# This block creates an Ubuntu Server VM.
+resource "azurerm_linux_virtual_machine" "vm" {
+  name                = "my-terraform-vm"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  size                = "Standard_B1s" # VM size (e.g., Standard_B1s, Standard_DS1_v2)
+  admin_username      = "azureuser"    # Administrator username for the VM
+
+  # SSH Key for authentication (replace with your actual public key or generate one)
+  # For production, it's recommended to use a more secure method for key management.
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("~/.ssh/id_rsa.pub") # Path to your SSH public key
+  }
+
+  network_interface_ids = [azurerm_network_interface.nic.id]
+
+  # Operating System image
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS" # Standard Local Redundant Storage
+  }
 }
 
-# Configure the CME: autoprov-cfg service 
-resource "checkpoint_management_run_script" "management-cme-config" {
-  script_name = "CME Configuration for VMSS"
-  script = "yes | /opt/CPcme/bin/autoprov_cfg init Azure -mn '${var.mgmt-name}' -tn '${var.vmss-template}' -otp '${var.vmss-sic}' -ver R80.40 -po '${var.new-policy-pkg}' -cn '${var.mgmt-controller}' -sb '${var.azure-subscription}' -at '${var.azure-tenant}' -aci '${var.azure-client-id}' -acs '${var.azure-client-secret}'; yes | /opt/CPcme/bin/autoprov_cfg set template -tn '${var.vmss-template}' -ia -uf -appi -av -ab -ips"
-  targets = [var.mgmt-name]
-  depends_on = [azurerm_resource_group_template_deployment.template-deployment-vmss]
+# Output the Public IP address of the VM
+# This output will display the public IP address after Terraform applies the configuration.
+output "public_ip_address" {
+  value       = azurerm_public_ip.public_ip.ip_address
+  description = "The public IP address of the Azure Virtual Machine."
+}
+
+# Output the SSH command
+output "ssh_command" {
+  value       = "ssh ${azurerm_linux_virtual_machine.vm.admin_username}@${azurerm_public_ip.public_ip.ip_address}"
+  description = "SSH command to connect to the Azure Virtual Machine."
 }
